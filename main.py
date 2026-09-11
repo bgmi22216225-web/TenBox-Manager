@@ -444,6 +444,21 @@ async def start_client_with_retry(client: Client, label: str, retries: int = 5) 
 
 
 async def main() -> None:
+    # Surface any exception happening inside asyncio background tasks
+    # (e.g. Pyrogram's internal update-dispatch tasks) that would
+    # otherwise be swallowed silently. If the live-update pipeline is
+    # crashing internally with zero log output, this is what will
+    # finally show it.
+    loop = asyncio.get_running_loop()
+
+    def _log_unhandled_exception(loop, context):
+        logger.error("UNHANDLED ASYNCIO EXCEPTION: %s", context)
+        exc = context.get("exception")
+        if exc is not None:
+            logger.error("Exception detail:", exc_info=exc)
+
+    loop.set_exception_handler(_log_unhandled_exception)
+
     logger.info("Initializing database...")
     await db.init_db(DATABASE_URL, SUPER_ADMIN_ID)
 
