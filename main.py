@@ -281,6 +281,18 @@ async def queue_worker() -> None:
 # Userbot handlers: source channel monitor + target bot reply listener
 # ---------------------------------------------------------------------------
 
+@user_client.on_message(filters.chat(SOURCE_CHANNEL_ID))
+async def on_source_any_debug(client: Client, message: Message):
+    # TEMPORARY: logs every message seen in the source channel, regardless
+    # of type, to diagnose whether updates are arriving at all and what
+    # media type they carry. Safe to remove once videos are confirmed
+    # flowing through the queue.
+    logger.info(
+        "DEBUG source-channel message id=%s media=%s has_video=%s has_document=%s has_animation=%s",
+        message.id, message.media, bool(message.video), bool(message.document), bool(message.animation),
+    )
+
+
 @user_client.on_message(filters.chat(SOURCE_CHANNEL_ID) & filters.video)
 async def on_source_video(client: Client, message: Message):
     logger.info("Queued new video from source channel (message id %s)", message.id)
