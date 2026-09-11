@@ -422,6 +422,30 @@ async def main() -> None:
     await start_client_with_retry(user_client, "Userbot")
     await start_client_with_retry(bot_client, "Bot")
 
+    # The userbot runs with an in-memory session, so its peer cache
+    # (access hashes for chats/channels) is empty on every restart.
+    # Without resolving peers first, incoming updates for channels the
+    # client hasn't "seen" yet are silently dropped by Pyrogram - no
+    # error, the handler just never fires. Iterating dialogs populates
+    # the cache for every chat the account is a member of, including
+    # SOURCE_CHANNEL_ID.
+    try:
+        dialog_count = 0
+        async for _ in user_client.get_dialogs():
+            dialog_count += 1
+        logger.info("Synced %s dialogs into userbot peer cache.", dialog_count)
+    except Exception:
+        logger.exception("Failed to sync dialogs - source channel updates may not be received.")
+
+    try:
+        source_chat = await user_client.get_chat(SOURCE_CHANNEL_ID)
+        logger.info("Resolved source channel: %s", source_chat.title or source_chat.id)
+    except Exception:
+        logger.exception(
+            "Could not resolve SOURCE_CHANNEL_ID (%s). Confirm the userbot account is a "
+            "member and the ID is correct.", SOURCE_CHANNEL_ID,
+        )
+
     worker_task = asyncio.create_task(queue_worker())
 
     logger.info("Bot fully started. Listening for videos in source channel...")
