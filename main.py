@@ -215,6 +215,38 @@ async def main():
     await bot.set_bot_commands(ADMIN_COMMANDS)
     await user.start()
 
+    # Pyrogram needs each chat's peer/access_hash cached in local session storage
+    # before it can resolve incoming updates from that chat (channels especially).
+    # Being a member isn't enough on its own — iterating dialogs forces Pyrogram
+    # to fetch and cache every chat's peer info, including SOURCE_CHANNEL_ID and
+    # PROCESSING_BOT_USERNAME. Without this, incoming updates fail with
+    # "Peer id invalid" / "ID not found" and handlers never fire.
+    logger.info("Warming up userbot peer cache...")
+    dialog_count = 0
+    async for _ in user.get_dialogs():
+        dialog_count += 1
+    logger.info(f"Cached {dialog_count} dialogs.")
+
+    # Explicitly resolve the two chats we care about, so we fail loudly at startup
+    # (with a clear error) instead of silently at update-handling time.
+    try:
+        source_chat = await user.get_chat(config.SOURCE_CHANNEL_ID)
+        logger.info(f"Resolved SOURCE_CHANNEL_ID -> {source_chat.title!r}")
+    except Exception:
+        logger.exception(
+            f"Could not resolve SOURCE_CHANNEL_ID={config.SOURCE_CHANNEL_ID}. "
+            f"Is the userbot account actually a member of this channel?"
+        )
+
+    try:
+        proc_chat = await user.get_chat(config.PROCESSING_BOT_USERNAME)
+        logger.info(f"Resolved PROCESSING_BOT_USERNAME -> {proc_chat.first_name!r}")
+    except Exception:
+        logger.exception(
+            f"Could not resolve PROCESSING_BOT_USERNAME={config.PROCESSING_BOT_USERNAME}. "
+            f"Has the userbot account sent /start to this bot at least once?"
+        )
+
     logger.info("Bot and userbot clients started. Listening for videos...")
 
     try:
