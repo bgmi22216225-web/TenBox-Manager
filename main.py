@@ -281,6 +281,15 @@ async def queue_worker() -> None:
 # Userbot handlers: source channel monitor + target bot reply listener
 # ---------------------------------------------------------------------------
 
+@user_client.on_raw_update()
+async def on_userbot_raw_update(client: Client, update, users, chats):
+    # TEMPORARY: fires on every single raw update the userbot session
+    # receives from Telegram, with zero filtering. If this never prints
+    # anything, updates aren't reaching the process at all (network,
+    # account, or session issue) - it's not a filter/handler bug.
+    logger.info("DEBUG userbot raw update: %s", type(update).__name__)
+
+
 @user_client.on_message(filters.chat(SOURCE_CHANNEL_ID))
 async def on_source_any_debug(client: Client, message: Message):
     # TEMPORARY: logs every message seen in the source channel, regardless
@@ -311,6 +320,13 @@ async def on_target_bot_reply(client: Client, message: Message):
 # ---------------------------------------------------------------------------
 # Admin command handlers (bot_client)
 # ---------------------------------------------------------------------------
+
+@bot_client.on_raw_update()
+async def on_bot_raw_update(client: Client, update, users, chats):
+    # TEMPORARY: same diagnostic as the userbot's raw handler, but for
+    # the bot session (covers /start and other commands not firing).
+    logger.info("DEBUG bot raw update: %s", type(update).__name__)
+
 
 @bot_client.on_message(filters.command("start"))
 async def cmd_start(client: Client, message: Message):
