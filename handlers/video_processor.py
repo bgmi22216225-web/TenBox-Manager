@@ -82,14 +82,17 @@ def resolve_secondary_reply(message: Message) -> bool:
 
 def _extract_tenbox_link(message: Message) -> str | None:
     """
-    Checks ONLY hyperlink entities (a link attached to text, e.g. a
-    "📥 Download" button/word) — NOT the plain caption/text itself.
-    A plain URL typed directly in the caption is ignored on purpose.
+    Extracts a link containing LINK_FILTER_KEYWORD from the reply. Handles
+    BOTH real-world formats seen from link-generator bots:
+      1. Plain visible URL text (Telegram auto-detects it and shows it as
+         a clickable blue link — this is a "URL" entity, same text as URL).
+      2. A hidden hyperlink behind different display text, e.g. a
+         "📥 Download" button (a "TEXT_LINK" entity, real URL not visible).
     """
     text = message.text or message.caption or ""
-    entities = list(message.entities or []) + list(message.caption_entities or [])
+    candidates = list(_URL_RE.findall(text))
 
-    candidates = []
+    entities = list(message.entities or []) + list(message.caption_entities or [])
     for entity in entities:
         entity_type = str(entity.type.name if hasattr(entity.type, "name") else entity.type).upper()
         if entity_type == "TEXT_LINK" and getattr(entity, "url", None):
@@ -100,9 +103,9 @@ def _extract_tenbox_link(message: Message) -> str | None:
             return url
 
     if candidates:
-        logger.info(f"Reply had hyperlink(s) but none matched '{LINK_FILTER_KEYWORD}': {candidates}")
+        logger.info(f"Reply had link(s) but none matched '{LINK_FILTER_KEYWORD}': {candidates}")
     else:
-        logger.info(f"Reply had no hyperlink entity at all. Raw text: {text!r}")
+        logger.info(f"Reply had no extractable link at all. Raw text: {text!r}")
     return None
 
 
