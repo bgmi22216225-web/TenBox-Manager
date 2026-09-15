@@ -81,15 +81,33 @@ def enqueue_video(message: Message) -> None:
 
 def resolve_secondary_reply(message: Message) -> bool:
     """
-    Called by the handler listening on the secondary bot's chat.
-    Resolves the pending future IF one is currently awaited.
-    Returns True if the message was consumed as the awaited reply.
+    Called by the handler listening on the secondary bot's chat (both new
+    messages AND edits — many bots edit their "Uploading..." status
+    message into the final result instead of sending a new one).
+
+    Only resolves the pending future if the message actually LOOKS like
+    the final result (has a photo/video attached, or contains a link).
+    Pure status/progress text (e.g. "Uploading video...") is ignored so
+    the worker keeps waiting for the real reply instead of giving up early.
     """
     global _pending_future
-    if _pending_future is not None and not _pending_future.done():
-        _pending_future.set_result(message)
+    if _pending_future is None or _pending_future.done():
+        return False
+
+    if not _looks_like_final_reply(message):
+        preview = (message.text or message.caption or "")[:80]
+        logger.info(f"Ignoring intermediate status message from secondary bot: {preview!r}")
+        return False
+
+    _pending_future.set_result(message)
+    return True
+
+
+def _looks_like_final_reply(message: Message) -> bool:
+    """A message is treated as final if it carries media, or a link."""
+    if message.photo or message.video or message.document:
         return True
-    return False
+    return _extract_tenbox_link(message) is not None
 
 
 def _extract_tenbox_link(message: Message) -> str | None:
