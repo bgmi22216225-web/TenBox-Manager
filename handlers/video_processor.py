@@ -50,6 +50,18 @@ _job_queue: asyncio.Queue = asyncio.Queue()
 _current_job_id: str | None = None
 _pending_future: asyncio.Future | None = None
 _worker_task: asyncio.Task | None = None
+_destination_client: Client | None = None
+
+
+def set_destination_client(client: Client | None) -> None:
+    """
+    Called once from main.py. If a dedicated DESTINATION_BOT_TOKEN client
+    was created (because the userbot isn't a member/admin of the
+    destination channel), that client is used for send_photo() instead
+    of the main pipeline client.
+    """
+    global _destination_client
+    _destination_client = client
 
 
 class Job:
@@ -117,7 +129,7 @@ def _build_caption(header: str, link: str, footer: str) -> str:
 async def _process_job(client: Client, job: Job) -> None:
     global _pending_future
     message = job.message
-    video_path = None
+    downloaded_path = None
     snapshot_path = None
 
     try:
@@ -147,17 +159,34 @@ async def _process_job(client: Client, job: Job) -> None:
 
         logger.info(f"Job {job.id}: matched link -> {link}")
 
-        # Step 3: download original video (never forwarded to destination) + snapshot.
-        video_path = await client.download_media(
-            message, file_name=os.path.join(TEMP_DIR, f"vid_{job.id}.mp4")
-        )
-        snapshot_path = await extract_snapshot(video_path, TEMP_DIR)
+        # Step 3: get the snapshot image, based on what the secondary bot sent back:
+        #   - reply has a photo  -> use it directly (already an image, no ffmpeg needed)
+        #   - reply has a video  -> download THAT video, extract one frame via ffmpeg
+        #   - reply has neither  -> fall back to a frame from the ORIGINAL source video
+        if reply.photo:
+            snapshot_path = await client.download_media(
+                reply, file_name=os.path.join(TEMP_DIR, f"img_{job.id}.jpg")
+            )
+            logger.info(f"Job {job.id}: reply was an image — using it directly as the snapshot.")
+        elif reply.video:
+            downloaded_path = await client.download_media(
+                reply, file_name=os.path.join(TEMP_DIR, f"vid_{job.id}.mp4")
+            )
+            snapshot_path = await extract_snapshot(downloaded_path, TEMP_DIR)
+            logger.info(f"Job {job.id}: reply was a video — extracted a frame as the snapshot.")
+        else:
+            downloaded_path = await client.download_media(
+                message, file_name=os.path.join(TEMP_DIR, f"vid_{job.id}.mp4")
+            )
+            snapshot_path = await extract_snapshot(downloaded_path, TEMP_DIR)
+            logger.info(f"Job {job.id}: reply had no media — fell back to a frame from the original video.")
 
         # Step 4: build caption with dynamic header/footer, preserving admin's markdown as-is.
         header, footer = await database.get_format()
         caption = _build_caption(header, link, footer)
 
-        await client.send_photo(
+        poster = _destination_client or client
+        await poster.send_photo(
             chat_id=DESTINATION_CHANNEL_ID,
             photo=snapshot_path,
             caption=caption,
@@ -168,7 +197,7 @@ async def _process_job(client: Client, job: Job) -> None:
     except Exception:
         logger.exception(f"Job {job.id}: unhandled error while processing.")
     finally:
-        safe_remove(video_path, snapshot_path)
+        safe_remove(downloaded_path, snapshot_path)
 
 
 async def _worker(client: Client) -> None:
