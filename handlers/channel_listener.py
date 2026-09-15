@@ -24,7 +24,7 @@ def register(app: Client) -> None:
         logger.info(f"New video detected in source channel (msg_id={message.id}).")
         enqueue_video(message)
 
-    @app.on_message(filters.chat(SECONDARY_BOT_USERNAME))
+    @app.on_message(filters.chat(SECONDARY_BOT_USERNAME) & filters.incoming)
     async def on_secondary_bot_reply(client: Client, message: Message):
         consumed = resolve_secondary_reply(message)
         if not consumed:
