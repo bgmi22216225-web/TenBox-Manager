@@ -1,9 +1,14 @@
 """
 handlers.py
-All Telethon event handlers for bot 'V':
-  - Admin-only commands (/start, /setheader, /setfooter, /viewformat, /delheader, /delfooter)
-  - Source channel video listener
-  - Secondary bot reply listener (new AND edited messages)
+All Telethon event handlers for bot 'V', split across the two clients:
+
+  register_source(client)  -> registered on the USERBOT (SESSION_STRING):
+                               source channel video listener +
+                               secondary bot reply listener (new + edited).
+
+  register_admin(client)   -> registered on the BOT (BOT_TOKEN):
+                               /start, /setheader, /setfooter, /viewformat,
+                               /delheader, /delfooter (admin-only, private chat).
 """
 
 import logging
@@ -26,9 +31,31 @@ def _strip_command(text: str) -> str:
     return parts[1].strip() if len(parts) > 1 else ""
 
 
-def register(client: TelegramClient) -> None:
+def register_source(client: TelegramClient) -> None:
+    """Registered on the userbot client: source channel + secondary bot."""
 
-    # ---- Admin commands (private chat only) ----
+    @client.on(events.NewMessage(chats=SOURCE_CHANNEL_ID))
+    async def on_source_video(event):
+        if not event.video:
+            return
+        logger.info(f"New video detected in source channel (msg_id={event.id}).")
+        enqueue_video(event.message)
+
+    @client.on(events.NewMessage(chats=SECONDARY_BOT_USERNAME, incoming=True))
+    async def on_secondary_bot_reply(event):
+        if not resolve_secondary_reply(event.message):
+            logger.debug("Received message from secondary bot with no pending job — ignored.")
+
+    @client.on(events.MessageEdited(chats=SECONDARY_BOT_USERNAME, incoming=True))
+    async def on_secondary_bot_edit(event):
+        # Some bots edit their "Uploading..." status message into the
+        # final result instead of sending a brand-new message.
+        if not resolve_secondary_reply(event.message):
+            logger.debug("Received edited message from secondary bot with no pending job — ignored.")
+
+
+def register_admin(client: TelegramClient) -> None:
+    """Registered on the BOT_TOKEN client: admin-only commands (private chat only)."""
 
     @client.on(events.NewMessage(pattern=r"^/start", func=lambda e: e.is_private))
     async def start_cmd(event):
@@ -103,26 +130,3 @@ def register(client: TelegramClient) -> None:
             f"{footer if footer else '_[no footer set]_'}"
         )
         await event.reply(preview, parse_mode="md")
-
-    # ---- Source channel: new videos ----
-
-    @client.on(events.NewMessage(chats=SOURCE_CHANNEL_ID))
-    async def on_source_video(event):
-        if not event.video:
-            return
-        logger.info(f"New video detected in source channel (msg_id={event.id}).")
-        enqueue_video(event.message)
-
-    # ---- Secondary bot: replies (new + edited) ----
-
-    @client.on(events.NewMessage(chats=SECONDARY_BOT_USERNAME, incoming=True))
-    async def on_secondary_bot_reply(event):
-        if not resolve_secondary_reply(event.message):
-            logger.debug("Received message from secondary bot with no pending job — ignored.")
-
-    @client.on(events.MessageEdited(chats=SECONDARY_BOT_USERNAME, incoming=True))
-    async def on_secondary_bot_edit(event):
-        # Some bots edit their "Uploading..." status message into the
-        # final result instead of sending a brand-new message.
-        if not resolve_secondary_reply(event.message):
-            logger.debug("Received edited message from secondary bot with no pending job — ignored.")
