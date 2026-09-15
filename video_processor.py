@@ -50,12 +50,13 @@ _worker_task: asyncio.Task | None = None
 _destination_client: TelegramClient | None = None
 
 
-def set_destination_client(client: TelegramClient | None) -> None:
+def set_destination_client(client: TelegramClient) -> None:
     """
-    Called once from main.py. If a dedicated DESTINATION_BOT_TOKEN client
-    was created (because the userbot isn't a member/admin of the
-    destination channel), that client is used for send_file() instead
-    of the main pipeline client.
+    Called once from main.py. The BOT_TOKEN client is admin in the
+    destination channel and is admin-only there, so the final
+    image+caption is always posted through it, separate from the
+    userbot client that listens to the source channel and talks to the
+    secondary bot.
     """
     global _destination_client
     _destination_client = client
