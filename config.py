@@ -46,13 +46,19 @@ def _parse_int_list(raw: str) -> list[int]:
 API_ID = int(_get_env("API_ID"))
 API_HASH = _get_env("API_HASH")
 
-# Either BOT_TOKEN (bot account) or SESSION_STRING (userbot account) must be set.
-BOT_TOKEN = _get_env("BOT_TOKEN", required=False)
-SESSION_STRING = _get_env("SESSION_STRING", required=False)
-
-if not BOT_TOKEN and not SESSION_STRING:
-    logger.critical("Either BOT_TOKEN or SESSION_STRING must be set.")
-    sys.exit(1)
+# SESSION_STRING: a real user account (logged in as a regular subscriber).
+# Required because the source channel belongs to someone else who won't
+# make our bot an admin there — Telegram only pushes channel updates to a
+# BOT if it's an admin of that channel, but a normal user account can read
+# a channel's posts just by being a member/subscriber. This same account
+# also talks to the secondary link-converter bot, since Telegram does not
+# allow bot-to-bot messaging.
+#
+# BOT_TOKEN: a dedicated bot account, admin in DESTINATION_CHANNEL_ID.
+# Handles posting the final image+link there, and all admin commands
+# (/setheader, /setfooter, /viewformat, /delheader, /delfooter).
+SESSION_STRING = _get_env("SESSION_STRING")
+BOT_TOKEN = _get_env("BOT_TOKEN")
 
 # ---- Database ----
 DATABASE_URL = _get_env("DATABASE_URL")
@@ -61,15 +67,6 @@ DATABASE_URL = _get_env("DATABASE_URL")
 SOURCE_CHANNEL_ID = int(_get_env("SOURCE_CHANNEL_ID"))
 DESTINATION_CHANNEL_ID = int(_get_env("DESTINATION_CHANNEL_ID"))
 SECONDARY_BOT_USERNAME = _get_env("SECONDARY_BOT_USERNAME").lstrip("@")
-
-# Optional SECOND bot, used ONLY to post the final snapshot to
-# DESTINATION_CHANNEL_ID. Use this when the account that talks to the
-# secondary bot (SESSION_STRING userbot) is different from the bot that
-# is already an admin in the destination channel (a real @xyz_bot made
-# via BotFather). If unset, the main client (above) is used for posting
-# to the destination channel instead — in that case, THAT account must
-# itself be a member/admin there.
-DESTINATION_BOT_TOKEN = _get_env("DESTINATION_BOT_TOKEN", required=False)
 
 # ---- Admins ----
 ADMIN_IDS = _parse_int_list(_get_env("ADMIN_IDS"))
