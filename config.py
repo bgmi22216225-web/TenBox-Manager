@@ -62,6 +62,15 @@ SOURCE_CHANNEL_ID = int(_get_env("SOURCE_CHANNEL_ID"))
 DESTINATION_CHANNEL_ID = int(_get_env("DESTINATION_CHANNEL_ID"))
 SECONDARY_BOT_USERNAME = _get_env("SECONDARY_BOT_USERNAME").lstrip("@")
 
+# Optional SECOND bot, used ONLY to post the final snapshot to
+# DESTINATION_CHANNEL_ID. Use this when the account that talks to the
+# secondary bot (SESSION_STRING userbot) is different from the bot that
+# is already an admin in the destination channel (a real @xyz_bot made
+# via BotFather). If unset, the main client (above) is used for posting
+# to the destination channel instead — in that case, THAT account must
+# itself be a member/admin there.
+DESTINATION_BOT_TOKEN = _get_env("DESTINATION_BOT_TOKEN", required=False)
+
 # ---- Admins ----
 ADMIN_IDS = _parse_int_list(_get_env("ADMIN_IDS"))
 if not ADMIN_IDS:
