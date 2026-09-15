@@ -29,3 +29,11 @@ def register(app: Client) -> None:
         consumed = resolve_secondary_reply(message)
         if not consumed:
             logger.debug("Received message from secondary bot with no pending job — ignored.")
+
+    @app.on_edited_message(filters.chat(SECONDARY_BOT_USERNAME) & filters.incoming)
+    async def on_secondary_bot_edit(client: Client, message: Message):
+        # Some bots edit their "Uploading..." status message into the
+        # final result instead of sending a brand-new message.
+        consumed = resolve_secondary_reply(message)
+        if not consumed:
+            logger.debug("Received edited message from secondary bot with no pending job — ignored.")
