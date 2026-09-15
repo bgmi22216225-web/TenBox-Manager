@@ -2,11 +2,27 @@
 main.py
 Entry point for bot 'V' (Telethon edition).
 
-Starts the Telethon client (bot token OR userbot session string),
-initializes the Neon DB pool, registers all handlers, warms the peer
-cache for the source + destination chats (this is what fixes the
-KeyError/ValueError when sending to a chat the session hasn't resolved
-yet), and starts the FIFO video-processing worker.
+Runs TWO Telethon clients with distinct roles:
+
+  userbot_client (SESSION_STRING) — a real user account:
+      - listens to SOURCE_CHANNEL_ID for new videos (the channel belongs
+        to someone else who won't make our bot an admin there, and a
+        bot only gets channel updates if it IS an admin — a normal
+        account just needs to be a subscriber)
+      - talks to the secondary link-converter bot (Telegram does not
+        allow bot-to-bot messaging, so this handshake must go through a
+        real account)
+
+  admin_bot_client (BOT_TOKEN) — a dedicated bot, admin in the
+  destination channel:
+      - posts the final image+caption to DESTINATION_CHANNEL_ID
+      - handles all admin commands (/setheader, /setfooter, /viewformat,
+        /delheader, /delfooter) via private chat
+
+Initializes the Neon DB pool, registers handlers on the right client,
+warms the peer cache for each chat on the client that will actually use
+it, and starts the FIFO video-processing worker (which runs on the
+userbot client but posts through admin_bot_client).
 """
 
 import asyncio
@@ -31,7 +47,6 @@ from config import (
     API_HASH,
     BOT_TOKEN,
     SESSION_STRING,
-    DESTINATION_BOT_TOKEN,
     SOURCE_CHANNEL_ID,
     DESTINATION_CHANNEL_ID,
 )
@@ -41,22 +56,14 @@ from video_processor import start_worker, stop_worker, set_destination_client
 APP_NAME = "V"
 
 
-def build_client() -> TelegramClient:
-    if SESSION_STRING:
-        logger.info("Starting as a USERBOT (SESSION_STRING detected).")
-        return TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
-    logger.info("Starting as a BOT (BOT_TOKEN detected).")
-    return TelegramClient(APP_NAME, API_ID, API_HASH)
-
-
 async def _warm_peer_cache(client: TelegramClient, chat_id: int, label: str) -> None:
     """
     Telethon needs to resolve a chat's entity at least once per session
     before it can reliably send to it by numeric ID — without this, the
     very first send to a "new" chat ID can fail with 'Cannot find any
-    entity corresponding to ...' (ValueError) or a KeyError deep inside
-    Telethon's entity cache, even if the account is a member/admin there.
-    Calling get_entity() forces that resolution and caches it locally.
+    entity corresponding to ...' (ValueError), even if the account is a
+    member/admin there. Calling get_entity() forces that resolution and
+    caches it locally.
     """
     try:
         await client.get_entity(chat_id)
@@ -71,39 +78,41 @@ async def _warm_peer_cache(client: TelegramClient, chat_id: int, label: str) -> 
 async def main() -> None:
     await database.init_db()
 
-    client = build_client()
+    # ---- Userbot client: source channel + secondary bot ----
+    userbot_client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
+    await userbot_client.start()
+    logger.info("Userbot client started (SESSION_STRING).")
 
-    dest_client = None
-    if DESTINATION_BOT_TOKEN:
-        logger.info("DESTINATION_BOT_TOKEN detected — using a dedicated bot to post to the destination channel.")
-        dest_client = TelegramClient(f"{APP_NAME}_dest", API_ID, API_HASH)
-        await dest_client.start(bot_token=DESTINATION_BOT_TOKEN)
-        set_destination_client(dest_client)
+    handlers.register_source(userbot_client)
 
-    if SESSION_STRING:
-        await client.start()
-    else:
-        await client.start(bot_token=BOT_TOKEN)
+    logger.info("Fetching userbot dialog list to populate entity cache...")
+    await userbot_client.get_dialogs(limit=None)
+    await _warm_peer_cache(userbot_client, SOURCE_CHANNEL_ID, "SOURCE_CHANNEL_ID")
 
-    handlers.register(client)
+    # ---- Admin bot client: destination posting + admin commands ----
+    admin_bot_client = TelegramClient(f"{APP_NAME}_bot", API_ID, API_HASH)
+    await admin_bot_client.start(bot_token=BOT_TOKEN)
+    logger.info("Admin bot client started (BOT_TOKEN).")
 
-    # Warm the peer cache for every chat we'll need to send/read from.
-    await _warm_peer_cache(client, SOURCE_CHANNEL_ID, "SOURCE_CHANNEL_ID")
-    if dest_client is not None:
-        await _warm_peer_cache(dest_client, DESTINATION_CHANNEL_ID, "DESTINATION_CHANNEL_ID")
-    else:
-        await _warm_peer_cache(client, DESTINATION_CHANNEL_ID, "DESTINATION_CHANNEL_ID")
+    handlers.register_admin(admin_bot_client)
+    set_destination_client(admin_bot_client)
 
-    start_worker(client)
+    logger.info("Fetching bot dialog list to populate entity cache...")
+    await admin_bot_client.get_dialogs(limit=None)
+    await _warm_peer_cache(admin_bot_client, DESTINATION_CHANNEL_ID, "DESTINATION_CHANNEL_ID")
+
+    start_worker(userbot_client)
     logger.info("Bot 'V' is up and running.")
 
     try:
-        await client.run_until_disconnected()
+        await asyncio.gather(
+            userbot_client.run_until_disconnected(),
+            admin_bot_client.run_until_disconnected(),
+        )
     finally:
         stop_worker()
-        await client.disconnect()
-        if dest_client is not None:
-            await dest_client.disconnect()
+        await userbot_client.disconnect()
+        await admin_bot_client.disconnect()
         await database.close_db()
         logger.info("Bot 'V' shut down cleanly.")
 
