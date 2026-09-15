@@ -81,10 +81,28 @@ def resolve_secondary_reply(message: Message) -> bool:
 
 
 def _extract_tenbox_link(message: Message) -> str | None:
+    """
+    Checks ONLY hyperlink entities (a link attached to text, e.g. a
+    "📥 Download" button/word) — NOT the plain caption/text itself.
+    A plain URL typed directly in the caption is ignored on purpose.
+    """
     text = message.text or message.caption or ""
-    for url in _URL_RE.findall(text):
+    entities = list(message.entities or []) + list(message.caption_entities or [])
+
+    candidates = []
+    for entity in entities:
+        entity_type = str(entity.type.name if hasattr(entity.type, "name") else entity.type).upper()
+        if entity_type == "TEXT_LINK" and getattr(entity, "url", None):
+            candidates.append(entity.url)
+
+    for url in candidates:
         if LINK_FILTER_KEYWORD in url.lower():
             return url
+
+    if candidates:
+        logger.info(f"Reply had hyperlink(s) but none matched '{LINK_FILTER_KEYWORD}': {candidates}")
+    else:
+        logger.info(f"Reply had no hyperlink entity at all. Raw text: {text!r}")
     return None
 
 
