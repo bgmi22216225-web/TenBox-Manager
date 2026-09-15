@@ -25,6 +25,22 @@ admin_filter = filters.user(ADMIN_IDS) & filters.private
 
 def register(app: Client) -> None:
 
+    @app.on_message(filters.command("start") & filters.private)
+    async def start_cmd(client: Client, message: Message):
+        if message.from_user and message.from_user.id in ADMIN_IDS:
+            text = (
+                "👋 *Bot 'V' is online.*\n\n"
+                "Available commands:\n"
+                "`/setheader <text>` — set caption header\n"
+                "`/setfooter <text>` — set caption footer\n"
+                "`/viewformat` — preview current header/footer\n"
+                "`/delheader` — clear header\n"
+                "`/delfooter` — clear footer"
+            )
+        else:
+            text = "👋 Hello! This bot is private and only responds to its admins."
+        await message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
+
     @app.on_message(filters.command("setheader") & admin_filter)
     async def set_header_cmd(client: Client, message: Message):
         text = _strip_command(message.text)
