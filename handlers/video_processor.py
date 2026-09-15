@@ -126,10 +126,34 @@ def _build_caption(header: str, link: str, footer: str) -> str:
     return "\n\n".join(parts)
 
 
+async def _get_snapshot_fast(client: Client, video, media_message: Message, job_id: str) -> str:
+    """
+    Fast path: download the video's existing Telegram thumbnail (a few KB,
+    already a first-frame-style preview) instead of the whole video.
+    Falls back to downloading the full video + FFmpeg only if no
+    thumbnail is available at all (rare).
+    """
+    if video and video.thumbs:
+        thumb_file_id = video.thumbs[-1].file_id  # largest available thumbnail
+        thumb_path = await client.download_media(
+            thumb_file_id, file_name=os.path.join(TEMP_DIR, f"thumb_{job_id}.jpg")
+        )
+        logger.info(f"Job {job_id}: used Telegram's built-in thumbnail (fast path, no full download).")
+        return thumb_path
+
+    logger.info(f"Job {job_id}: no thumbnail available — falling back to full video download + FFmpeg.")
+    downloaded_path = await client.download_media(
+        media_message, file_name=os.path.join(TEMP_DIR, f"vid_{job_id}.mp4")
+    )
+    try:
+        return await extract_snapshot(downloaded_path, TEMP_DIR)
+    finally:
+        safe_remove(downloaded_path)
+
+
 async def _process_job(client: Client, job: Job) -> None:
     global _pending_future
     message = job.message
-    downloaded_path = None
     snapshot_path = None
 
     try:
@@ -159,27 +183,22 @@ async def _process_job(client: Client, job: Job) -> None:
 
         logger.info(f"Job {job.id}: matched link -> {link}")
 
-        # Step 3: get the snapshot image, based on what the secondary bot sent back:
-        #   - reply has a photo  -> use it directly (already an image, no ffmpeg needed)
-        #   - reply has a video  -> download THAT video, extract one frame via ffmpeg
-        #   - reply has neither  -> fall back to a frame from the ORIGINAL source video
+        # Step 3: get the snapshot image, based on what the secondary bot sent back.
+        # FAST PATH: Telegram already stores a small thumbnail (first-frame preview)
+        # with every video — download just that (a few KB) instead of the whole
+        # video + running FFmpeg. FFmpeg is only a fallback if no thumbnail exists.
+        #   - reply has a photo  -> use it directly
+        #   - reply has a video  -> use its thumbnail (fallback: download + ffmpeg)
+        #   - reply has neither  -> use ORIGINAL source video's thumbnail (fallback: same)
         if reply.photo:
             snapshot_path = await client.download_media(
                 reply, file_name=os.path.join(TEMP_DIR, f"img_{job.id}.jpg")
             )
             logger.info(f"Job {job.id}: reply was an image — using it directly as the snapshot.")
         elif reply.video:
-            downloaded_path = await client.download_media(
-                reply, file_name=os.path.join(TEMP_DIR, f"vid_{job.id}.mp4")
-            )
-            snapshot_path = await extract_snapshot(downloaded_path, TEMP_DIR)
-            logger.info(f"Job {job.id}: reply was a video — extracted a frame as the snapshot.")
+            snapshot_path = await _get_snapshot_fast(client, reply.video, reply, job.id)
         else:
-            downloaded_path = await client.download_media(
-                message, file_name=os.path.join(TEMP_DIR, f"vid_{job.id}.mp4")
-            )
-            snapshot_path = await extract_snapshot(downloaded_path, TEMP_DIR)
-            logger.info(f"Job {job.id}: reply had no media — fell back to a frame from the original video.")
+            snapshot_path = await _get_snapshot_fast(client, message.video, message, job.id)
 
         # Step 4: build caption with dynamic header/footer, preserving admin's markdown as-is.
         header, footer = await database.get_format()
@@ -197,7 +216,7 @@ async def _process_job(client: Client, job: Job) -> None:
     except Exception:
         logger.exception(f"Job {job.id}: unhandled error while processing.")
     finally:
-        safe_remove(downloaded_path, snapshot_path)
+        safe_remove(snapshot_path)
 
 
 async def _worker(client: Client) -> None:
