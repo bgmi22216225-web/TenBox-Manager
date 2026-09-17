@@ -27,11 +27,12 @@ import os
 import re
 import uuid
 
-from telethon import TelegramClient
+import aiohttp
 from telethon.tl.types import MessageEntityTextUrl
 
 import database
 from config import (
+    BOT_TOKEN,
     SECONDARY_BOT_USERNAME,
     DESTINATION_CHANNEL_ID,
     SECONDARY_BOT_TIMEOUT,
@@ -42,24 +43,37 @@ from config import (
 logger = logging.getLogger("V.video_processor")
 
 _URL_RE = re.compile(r"https?://\S+")
+_TELEGRAM_API_BASE = "https://api.telegram.org"
 
 # Strict 1-to-1 mapping state.
 _job_queue: asyncio.Queue = asyncio.Queue()
 _pending_future: asyncio.Future | None = None
 _worker_task: asyncio.Task | None = None
-_destination_client: TelegramClient | None = None
 
 
-def set_destination_client(client: TelegramClient) -> None:
+async def _post_snapshot_via_bot_api(photo_path: str, caption: str) -> None:
     """
-    Called once from main.py. The BOT_TOKEN client is admin in the
-    destination channel and is admin-only there, so the final
-    image+caption is always posted through it, separate from the
-    userbot client that listens to the source channel and talks to the
-    secondary bot.
+    Posts the final image+caption straight through Telegram's plain HTTP
+    Bot API instead of the Telethon (MTProto) client. This sidesteps
+    Telethon's peer/entity resolution entirely: bot accounts aren't even
+    allowed to call GetDialogsRequest over MTProto (BotMethodInvalidError),
+    but the plain Bot API's sendPhoto works with a bare chat_id as long
+    as the bot is an admin of that chat — no pre-resolved entity needed.
     """
-    global _destination_client
-    _destination_client = client
+    url = f"{_TELEGRAM_API_BASE}/bot{BOT_TOKEN}/sendPhoto"
+    with open(photo_path, "rb") as f:
+        data = aiohttp.FormData()
+        data.add_field("chat_id", str(DESTINATION_CHANNEL_ID))
+        if caption:
+            data.add_field("caption", caption)
+            data.add_field("parse_mode", "Markdown")
+        data.add_field("photo", f, filename=os.path.basename(photo_path))
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, data=data) as resp:
+                result = await resp.json()
+
+    if not result.get("ok"):
+        raise RuntimeError(f"Telegram Bot API sendPhoto failed: {result}")
 
 
 class Job:
@@ -243,13 +257,7 @@ async def _process_job(client: TelegramClient, job: Job) -> None:
         header, footer = await database.get_format()
         caption = _build_caption(header, link, footer)
 
-        poster = _destination_client or client
-        await poster.send_file(
-            DESTINATION_CHANNEL_ID,
-            file=snapshot_path,
-            caption=caption,
-            parse_mode="md",
-        )
+        await _post_snapshot_via_bot_api(snapshot_path, caption)
         logger.info(f"Job {job.id}: snapshot posted to destination channel.")
 
     except Exception:
