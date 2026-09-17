@@ -59,18 +59,34 @@ async def _post_snapshot_via_bot_api(photo_path: str, caption: str) -> None:
     allowed to call GetDialogsRequest over MTProto (BotMethodInvalidError),
     but the plain Bot API's sendPhoto works with a bare chat_id as long
     as the bot is an admin of that chat — no pre-resolved entity needed.
+
+    Sent with parse_mode=Markdown so the admin's header/footer formatting
+    (bold, italic, etc.) still renders. If Markdown parsing ever fails
+    anyway (a stray unmatched '_' or '*' somewhere), retries once as
+    plain text so the post is never dropped — only the formatting is
+    lost that one time.
     """
     url = f"{_TELEGRAM_API_BASE}/bot{BOT_TOKEN}/sendPhoto"
-    with open(photo_path, "rb") as f:
-        data = aiohttp.FormData()
-        data.add_field("chat_id", str(DESTINATION_CHANNEL_ID))
-        if caption:
-            data.add_field("caption", caption)
-            data.add_field("parse_mode", "Markdown")
-        data.add_field("photo", f, filename=os.path.basename(photo_path))
-        async with aiohttp.ClientSession() as session:
-            async with session.post(url, data=data) as resp:
-                result = await resp.json()
+
+    async def _attempt(use_markdown: bool) -> dict:
+        with open(photo_path, "rb") as f:
+            data = aiohttp.FormData()
+            data.add_field("chat_id", str(DESTINATION_CHANNEL_ID))
+            if caption:
+                data.add_field("caption", caption)
+                if use_markdown:
+                    data.add_field("parse_mode", "Markdown")
+            data.add_field("photo", f, filename=os.path.basename(photo_path))
+            async with aiohttp.ClientSession() as session:
+                async with session.post(url, data=data) as resp:
+                    return await resp.json()
+
+    result = await _attempt(use_markdown=True)
+    if not result.get("ok") and "can't parse entities" in str(result.get("description", "")).lower():
+        logger.warning(
+            f"Caption failed Markdown parsing ({result.get('description')}); retrying as plain text."
+        )
+        result = await _attempt(use_markdown=False)
 
     if not result.get("ok"):
         raise RuntimeError(f"Telegram Bot API sendPhoto failed: {result}")
@@ -149,7 +165,13 @@ def _extract_tenbox_link(message) -> str | None:
 
 
 def _build_caption(header: str, link: str, footer: str) -> str:
-    parts = [p for p in (header.strip(), link.strip(), footer.strip()) if p]
+    # Wrapped as a Markdown link: Telegram's legacy Markdown parser treats
+    # the URL inside (...) as a literal string, not something to scan for
+    # entities — so a stray '_' or '*' in the auto-generated link (very
+    # common, since these are random file IDs) can never break parsing.
+    # Header/footer are left exactly as the admin typed them.
+    link_line = f"[🔗 Download Link]({link.strip()})" if link.strip() else ""
+    parts = [p for p in (header.strip(), link_line, footer.strip()) if p]
     return "\n\n".join(parts)
 
 
