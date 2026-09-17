@@ -22,6 +22,7 @@ Core pipeline for bot 'V' (Telethon edition):
 """
 
 import asyncio
+import html
 import logging
 import os
 import re
@@ -60,33 +61,34 @@ async def _post_snapshot_via_bot_api(photo_path: str, caption: str) -> None:
     but the plain Bot API's sendPhoto works with a bare chat_id as long
     as the bot is an admin of that chat — no pre-resolved entity needed.
 
-    Sent with parse_mode=Markdown so the admin's header/footer formatting
-    (bold, italic, etc.) still renders. If Markdown parsing ever fails
-    anyway (a stray unmatched '_' or '*' somewhere), retries once as
-    plain text so the post is never dropped — only the formatting is
-    lost that one time.
+    Sent with parse_mode=HTML (caption is pre-converted by
+    _build_caption) so the admin's header/footer bold/italic still
+    renders, while the raw link is shown as plain text — HTML mode
+    ignores '_' and '*' entirely, so a link's underscores can never
+    break parsing the way legacy Markdown did. If parsing ever fails
+    anyway, retries once as plain text so the post is never dropped.
     """
     url = f"{_TELEGRAM_API_BASE}/bot{BOT_TOKEN}/sendPhoto"
 
-    async def _attempt(use_markdown: bool) -> dict:
+    async def _attempt(use_html: bool) -> dict:
         with open(photo_path, "rb") as f:
             data = aiohttp.FormData()
             data.add_field("chat_id", str(DESTINATION_CHANNEL_ID))
             if caption:
                 data.add_field("caption", caption)
-                if use_markdown:
-                    data.add_field("parse_mode", "Markdown")
+                if use_html:
+                    data.add_field("parse_mode", "HTML")
             data.add_field("photo", f, filename=os.path.basename(photo_path))
             async with aiohttp.ClientSession() as session:
                 async with session.post(url, data=data) as resp:
                     return await resp.json()
 
-    result = await _attempt(use_markdown=True)
+    result = await _attempt(use_html=True)
     if not result.get("ok") and "can't parse entities" in str(result.get("description", "")).lower():
         logger.warning(
-            f"Caption failed Markdown parsing ({result.get('description')}); retrying as plain text."
+            f"Caption failed HTML parsing ({result.get('description')}); retrying as plain text."
         )
-        result = await _attempt(use_markdown=False)
+        result = await _attempt(use_html=False)
 
     if not result.get("ok"):
         raise RuntimeError(f"Telegram Bot API sendPhoto failed: {result}")
@@ -164,14 +166,35 @@ def _extract_tenbox_link(message) -> str | None:
     return None
 
 
+_BOLD_RE = re.compile(r"\*\*(.+?)\*\*")
+_ITALIC_RE = re.compile(r"(?<!\w)_(.+?)_(?!\w)")
+_CODE_RE = re.compile(r"`(.+?)`")
+
+
+def _markdown_to_html(text: str) -> str:
+    """
+    Converts the admin's typed **bold** / _italic_ / `code` markers into
+    real HTML tags, after HTML-escaping the raw text first (so any
+    literal <, >, & the admin typed can't be mistaken for a tag). This
+    lets header/footer keep the same look the admin is used to, while
+    the whole caption is sent as HTML — which is what lets the link be
+    shown as a fully plain, unwrapped URL with zero risk of a stray '_'
+    or '*' in it ever breaking caption parsing.
+    """
+    escaped = html.escape(text)
+    escaped = _BOLD_RE.sub(r"<b>\1</b>", escaped)
+    escaped = _ITALIC_RE.sub(r"<i>\1</i>", escaped)
+    escaped = _CODE_RE.sub(r"<code>\1</code>", escaped)
+    return escaped
+
+
 def _build_caption(header: str, link: str, footer: str) -> str:
-    # Wrapped as a Markdown link: Telegram's legacy Markdown parser treats
-    # the URL inside (...) as a literal string, not something to scan for
-    # entities — so a stray '_' or '*' in the auto-generated link (very
-    # common, since these are random file IDs) can never break parsing.
-    # Header/footer are left exactly as the admin typed them.
-    link_line = f"[🔗 Download Link]({link.strip()})" if link.strip() else ""
-    parts = [p for p in (header.strip(), link_line, footer.strip()) if p]
+    header_html = _markdown_to_html(header.strip()) if header.strip() else ""
+    footer_html = _markdown_to_html(footer.strip()) if footer.strip() else ""
+    # The link is only HTML-escaped (never converted) so it always shows
+    # as the full, plain, clickable URL exactly as received.
+    link_html = html.escape(link.strip()) if link.strip() else ""
+    parts = [p for p in (header_html, link_html, footer_html) if p]
     return "\n\n".join(parts)
 
 
