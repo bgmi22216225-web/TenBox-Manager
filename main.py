@@ -15,14 +15,19 @@ Runs TWO Telethon clients with distinct roles:
 
   admin_bot_client (BOT_TOKEN) — a dedicated bot, admin in the
   destination channel:
-      - posts the final image+caption to DESTINATION_CHANNEL_ID
+      - posts the final image+caption to DESTINATION_CHANNEL_ID via the
+        plain Telegram Bot HTTP API (NOT Telethon/MTProto) — bot accounts
+        cannot call GetDialogsRequest over MTProto, so there is no way
+        to warm an entity cache for them the way we do for the userbot;
+        the plain HTTP API sidesteps that entirely since it only needs
+        a bare chat_id.
       - handles all admin commands (/setheader, /setfooter, /viewformat,
         /delheader, /delfooter) via private chat
 
 Initializes the Neon DB pool, registers handlers on the right client,
-warms the peer cache for each chat on the client that will actually use
-it, and starts the FIFO video-processing worker (which runs on the
-userbot client but posts through admin_bot_client).
+warms the peer cache for the source chat (userbot only — bots can't do
+this), and starts the FIFO video-processing worker (which runs on the
+userbot client but posts through the plain Bot API).
 """
 
 import asyncio
@@ -48,10 +53,9 @@ from config import (
     BOT_TOKEN,
     SESSION_STRING,
     SOURCE_CHANNEL_ID,
-    DESTINATION_CHANNEL_ID,
 )
 import handlers
-from video_processor import start_worker, stop_worker, set_destination_client
+from video_processor import start_worker, stop_worker
 
 APP_NAME = "V"
 
@@ -63,7 +67,8 @@ async def _warm_peer_cache(client: TelegramClient, chat_id: int, label: str) -> 
     very first send to a "new" chat ID can fail with 'Cannot find any
     entity corresponding to ...' (ValueError), even if the account is a
     member/admin there. Calling get_entity() forces that resolution and
-    caches it locally.
+    caches it locally. (Only relevant for real user accounts — bot
+    accounts can't call GetDialogsRequest to populate this cache at all.)
     """
     try:
         await client.get_entity(chat_id)
@@ -71,7 +76,7 @@ async def _warm_peer_cache(client: TelegramClient, chat_id: int, label: str) -> 
     except Exception:
         logger.exception(
             f"Could not resolve {label} ({chat_id}). "
-            f"Make sure this account is a member (and, for the destination, an admin) of that chat."
+            f"Make sure this account is a member of that chat."
         )
 
 
@@ -89,17 +94,13 @@ async def main() -> None:
     await userbot_client.get_dialogs(limit=None)
     await _warm_peer_cache(userbot_client, SOURCE_CHANNEL_ID, "SOURCE_CHANNEL_ID")
 
-    # ---- Admin bot client: destination posting + admin commands ----
+    # ---- Admin bot client: admin commands only (destination posting
+    # goes through the plain Bot HTTP API in video_processor.py) ----
     admin_bot_client = TelegramClient(f"{APP_NAME}_bot", API_ID, API_HASH)
     await admin_bot_client.start(bot_token=BOT_TOKEN)
     logger.info("Admin bot client started (BOT_TOKEN).")
 
     handlers.register_admin(admin_bot_client)
-    set_destination_client(admin_bot_client)
-
-    logger.info("Fetching bot dialog list to populate entity cache...")
-    await admin_bot_client.get_dialogs(limit=None)
-    await _warm_peer_cache(admin_bot_client, DESTINATION_CHANNEL_ID, "DESTINATION_CHANNEL_ID")
 
     start_worker(userbot_client)
     logger.info("Bot 'V' is up and running.")
