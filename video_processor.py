@@ -185,7 +185,7 @@ async def _extract_ffmpeg_snapshot(video_path: str, job_id: str, timestamp: str 
     return output_path
 
 
-async def _get_snapshot_fast(client: TelegramClient, message, job_id: str) -> str:
+async def _get_snapshot_fast(client, message, job_id: str) -> str:
     """
     Fast path: Telethon can download just a video's existing thumbnail
     (a few KB, already a first-frame-style preview) by passing thumb=-1
@@ -207,7 +207,7 @@ async def _get_snapshot_fast(client: TelegramClient, message, job_id: str) -> st
         _safe_remove(downloaded_path)
 
 
-async def _process_job(client: TelegramClient, job: Job) -> None:
+async def _process_job(client, job: Job) -> None:
     global _pending_future
     message = job.message
     snapshot_path = None
@@ -266,7 +266,7 @@ async def _process_job(client: TelegramClient, job: Job) -> None:
         _safe_remove(snapshot_path)
 
 
-async def _worker(client: TelegramClient) -> None:
+async def _worker(client) -> None:
     logger.info("Video processing worker started.")
     while True:
         job: Job = await _job_queue.get()
@@ -276,7 +276,7 @@ async def _worker(client: TelegramClient) -> None:
             _job_queue.task_done()
 
 
-def start_worker(client: TelegramClient) -> None:
+def start_worker(client) -> None:
     """Call once at startup (after client.start())."""
     global _worker_task
     if _worker_task is None:
